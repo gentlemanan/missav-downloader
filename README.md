@@ -1,6 +1,6 @@
 # missav-downloader
 
-Lightweight Python script to download videos from missav.ai as `.ts` files.
+Lightweight Python script to download videos from missav.* as `.ts` files.
 
 ## Usage
 
