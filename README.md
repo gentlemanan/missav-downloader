@@ -1,6 +1,6 @@
 # missav-downloader
 
-Lightweight Python script to download videos from missav.* as `.ts` files.
+Lightweight Python script to download videos from `missav.*` as `.ts` files.
 
 ## Usage
 
@@ -10,14 +10,20 @@ uvx --from git+https://github.com/gentlemanan/missav-downloader missav <URL>
 
 ### Options
 
-```
+```bash
+usage: missav [-h] [-o OUTPUT] [-q] [-w WORKERS] url
+
+MissAV video downloader
+
 positional arguments:
-  url                   MissAV video URL (e.g. https://missav.ai/sone-543)
+  url                   MissAV video URL (e.g., https://missav.ai/sone-543)
 
 options:
-  -o, --output DIR      Output directory (default: downloads)
-  -w, --workers N       Parallel download workers (default: 2× CPU, max 16)
-  -q, --quiet           Suppress progress output
+  -h, --help            show this help message and exit
+  -o, --output OUTPUT   Output directory (default: downloads)
+  -q, --quiet           Suppress output messages
+  -w, --workers WORKERS
+                        Parallel download workers (default: 16)         Suppress progress output
 ```
 
 ### Examples
