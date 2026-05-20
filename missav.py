@@ -2,8 +2,7 @@
 # /// script
 # dependencies = [
 #   "requests",
-#   "cloudscraper",
-#   "beautifulsoup4",
+#   "playwright",
 #   "m3u8",
 #   "pycryptodome",
 #   "tqdm",
@@ -20,11 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-import cloudscraper
 import m3u8
 import requests
-from bs4 import BeautifulSoup
 from Crypto.Cipher import AES
+from playwright.sync_api import sync_playwright
 from tqdm import tqdm
 
 
@@ -66,14 +64,30 @@ class Logger:
 
 
 class HttpClient:
-    """Single-responsibility: own and expose HTTP sessions (scraper + plain)."""
+    """Single-responsibility: own and expose HTTP sessions (Playwright + plain requests)."""
 
     def __init__(self):
-        self.scraper = cloudscraper.create_scraper(
-            browser={"browser": "firefox", "platform": "linux"},
-            delay=10,
-        )
+        self._pw = sync_playwright().start()
+        self._browser = self._pw.chromium.launch(headless=True)
         self.session = self._build_session()
+
+    def fetch_page(self, url: str) -> Optional[str]:
+        """Fetch a page via Playwright, returns HTML or None."""
+        ctx = self._browser.new_context(user_agent=REQUEST_HEADERS["User-Agent"])
+        try:
+            page = ctx.new_page()
+            resp = page.goto(url, wait_until="networkidle", timeout=60000)
+            if resp and resp.status == 200:
+                return page.content()
+            return None
+        except Exception:
+            return None
+        finally:
+            ctx.close()
+
+    def close(self):
+        self._browser.close()
+        self._pw.stop()
 
     @staticmethod
     def _build_session() -> requests.Session:
@@ -143,6 +157,7 @@ class PageScraper:
 
     def scrape(self, url: str) -> tuple[Optional[str], Optional[str]]:
         """Return (title, m3u8_url) or (None, None) on failure."""
+        url = re.sub(r"(https?://[^/]+)/dm\d+/", r"\1/", url)
         self._log(f"Fetching video info from {url}...")
         html = self._fetch_html(url)
         if html is None:
@@ -165,26 +180,19 @@ class PageScraper:
 
     def _fetch_html(self, url: str) -> Optional[str]:
         for attempt in range(MAX_RETRIES):
-            try:
-                resp = self._http.scraper.get(url, timeout=60)
-                if resp.status_code == 200:
-                    return resp.text
-                time.sleep(2)
-            except Exception as e:
-                self._log(f"Attempt {attempt + 1}/{MAX_RETRIES} failed: {e}")
-                if attempt < MAX_RETRIES - 1:
-                    time.sleep(3)
+            html = self._http.fetch_page(url)
+            if html is not None:
+                return html
+            self._log(f"Attempt {attempt + 1}/{MAX_RETRIES} failed")
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(3)
         self._log("Failed to fetch page after retries")
         return None
 
     @staticmethod
     def _extract_title(html: str) -> Optional[str]:
-        match = re.search(r'og:title"\s+content="([^"]+)"', html)
-        if match:
-            return match.group(1)
-        soup = BeautifulSoup(html, "html.parser")
-        meta = soup.find("meta", property="og:title")
-        return meta.get("content", "") if meta else None
+        match = re.search(r'og:title["\s]+content="([^"]+)"', html)
+        return match.group(1) if match else None
 
     @staticmethod
     def _extract_m3u8(html: str) -> Optional[str]:
@@ -398,6 +406,7 @@ class VideoDownloadOrchestrator:
         if output_file is None:
             return False
 
+        self._http.close()
         self._logger.log(f"Download complete: {output_file}")
         return True
 
