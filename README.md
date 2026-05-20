@@ -1,6 +1,6 @@
 # missav-downloader
 
-Lightweight Python script to download videos from `missav.*` as `.ts` files.
+Lightweight Python script to download videos from missav.ai as `.ts` files. Handles Cloudflare protection via headless Chromium (Playwright).
 
 ## Usage
 
@@ -8,33 +8,28 @@ Lightweight Python script to download videos from `missav.*` as `.ts` files.
 uvx --from git+https://github.com/gentlemanan/missav-downloader missav <URL>
 ```
 
+On first run, Playwright will automatically download the Chromium browser (~150MB).
+
 ### Options
 
-```bash
-usage: missav [-h] [-o OUTPUT] [-q] [-w WORKERS] url
-
-MissAV video downloader
-
+```
 positional arguments:
-  url                   MissAV video URL (e.g., https://missav.ai/sone-543)
+  url                   MissAV video URL
 
 options:
-  -h, --help            show this help message and exit
-  -o, --output OUTPUT   Output directory (default: downloads)
-  -q, --quiet           Suppress output messages
-  -w, --workers WORKERS
-                        Parallel download workers (default: 16)         Suppress progress output
+  -o, --output DIR      Output directory (default: downloads)
+  -w, --workers N       Parallel download workers (default: 2× CPU, max 16)
+  -q, --quiet           Suppress progress output
 ```
 
 ### Examples
 
 ```bash
-uvx --from git+https://github.com/gentlemanan/missav-downloader missav https://missav.ai/sone-543
+uvx --from git+https://github.com/gentlemanan/missav-downloader missav https://missav.ai/cn/abf-353-uncensored-leak
 
-# Custom output directory
-uvx --from git+https://github.com/gentlemanan/missav-downloader missav https://missav.ai/sone-543 -o ~/Videos
+uvx --from git+https://github.com/gentlemanan/missav-downloader missav https://missav.ai/dm31/cn/stars-128 -o ~/Videos
 ```
 
 ## Output
 
-Videos are saved as `<title>.ts` (MPEG-TS). All major players (VLC, mpv, IINA) play `.ts` natively.
+Videos are saved as `<title>.ts` (MPEG-TS). Playable in VLC, mpv, and IINA.
