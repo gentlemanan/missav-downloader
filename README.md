@@ -1,6 +1,6 @@
 # missav-downloader
 
-Lightweight Python script to download videos from missav.ai as `.ts` files. Handles Cloudflare protection via headless Chromium (Playwright).
+Lightweight Python script to download videos from missav.ai as `.mp4` files. Handles Cloudflare protection via headless Chromium (Playwright).
 
 ## Usage
 
@@ -34,6 +34,12 @@ uvx --from git+https://github.com/gentlemanan/missav-downloader missav https://m
 uvx --from git+https://github.com/gentlemanan/missav-downloader missav https://missav.ai/dm31/cn/stars-128 -o ~/Videos
 ```
 
+## Requirements
+
+- **ffmpeg** must be available in `PATH` for the TS→MP4 remux step.
+  - macOS: `brew install ffmpeg`
+  - Ubuntu/Debian: `sudo apt install ffmpeg`
+
 ## Output
 
-Videos are saved as `<title>.ts` (MPEG-TS). Playable in VLC, mpv, and IINA.
+Videos are saved as `<title>.mp4`. Playable in any video player.
