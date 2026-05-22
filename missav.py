@@ -12,6 +12,7 @@
 import argparse
 import os
 import re
+import subprocess
 import sys
 import time
 import concurrent.futures
@@ -334,15 +335,16 @@ class SegmentMerger:
         self._log = logger.log
 
     def merge(self, title: str, total: int) -> Optional[Path]:
-        output_file = self._output_dir / f"{title}.ts"
-        self._log(f"Merging {total} segments to {output_file}...")
+        ts_file = self._output_dir / f"{title}.ts"
+        output_file = self._output_dir / f"{title}.mp4"
+        self._log(f"Merging {total} segments...")
         try:
-            with open(output_file, "wb") as out:
+            with open(ts_file, "wb") as out:
                 for i in range(total):
                     seg = self._temp_dir / f"seg_{i:06d}.ts"
                     if not seg.exists():
                         self._log(f"Segment {i} missing — aborting merge")
-                        output_file.unlink(missing_ok=True)
+                        ts_file.unlink(missing_ok=True)
                         return None
                     out.write(seg.read_bytes())
                     seg.unlink()
@@ -350,6 +352,16 @@ class SegmentMerger:
                 self._temp_dir.rmdir()
             except OSError:
                 pass
+
+            self._log(f"Remuxing to {output_file}...")
+            result = subprocess.run(
+                ["ffmpeg", "-y", "-i", str(ts_file), "-c", "copy", str(output_file)],
+                capture_output=True,
+            )
+            ts_file.unlink(missing_ok=True)
+            if result.returncode != 0:
+                self._log(f"ffmpeg error: {result.stderr.decode()}")
+                return None
             return output_file
         except Exception as e:
             self._log(f"Error merging segments: {e}")
