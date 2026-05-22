@@ -5,10 +5,11 @@ Lightweight Python script to download videos from missav.ai as `.ts` files. Hand
 ## Usage
 
 ```bash
-uvx --from git+https://github.com/gentlemanan/missav-downloader missav <URL>
-```
+# 1. On first run, install the required headless Chromium browser (~150MB)
+uvx --with playwright missav-downloader playwright install chromium
 
-On first run, Playwright will automatically download the Chromium browser (~150MB).
+# 2. Download a video
+uvx --from git+[https://github.com/gentlemanan/missav-downloader](https://github.com/gentlemanan/missav-downloader) missav <URL>
 
 ### Options
 
