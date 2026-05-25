@@ -23,7 +23,7 @@ from typing import List, Optional
 import m3u8
 import requests
 from Crypto.Cipher import AES
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
 from tqdm import tqdm
 
 
@@ -45,6 +45,11 @@ M3U8_HEADERS = {
 _cpu = os.cpu_count() or 4
 DEFAULT_WORKERS = min(_cpu * 2, 16)
 MAX_RETRIES = 3
+PAGE_LOAD_TIMEOUT_MS = 10000
+
+
+class PageFetchTimeoutError(Exception):
+    """Raised when page loading exceeds the configured timeout."""
 
 
 # ── Logger ─────────────────────────────────────────────────────────────────────
@@ -72,15 +77,17 @@ class HttpClient:
         self._browser = self._pw.chromium.launch(headless=True)
         self.session = self._build_session()
 
-    def fetch_page(self, url: str) -> Optional[str]:
+    def fetch_page(self, url: str, timeout_ms: int = PAGE_LOAD_TIMEOUT_MS) -> Optional[str]:
         """Fetch a page via Playwright, returns HTML or None."""
         ctx = self._browser.new_context(user_agent=REQUEST_HEADERS["User-Agent"])
         try:
             page = ctx.new_page()
-            resp = page.goto(url, wait_until="networkidle", timeout=60000)
+            resp = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             if resp and resp.status == 200:
                 return page.content()
             return None
+        except PlaywrightTimeoutError as e:
+            raise PageFetchTimeoutError(f"Timed out after {timeout_ms}ms") from e
         except Exception:
             return None
         finally:
@@ -158,10 +165,16 @@ class PageScraper:
 
     def scrape(self, url: str) -> tuple[Optional[str], Optional[str]]:
         """Return (title, m3u8_url) or (None, None) on failure."""
-        url = re.sub(r"(https?://[^/]+)/dm\d+/", r"\1/", url)
+        url = self._normalize_missav_url(url)
         self._log(f"Fetching video info from {url}...")
-        html = self._fetch_html(url)
+        html, timed_out = self._fetch_html(url)
         if html is None:
+            if timed_out:
+                manual_m3u8 = self._prompt_manual_m3u8()
+                if manual_m3u8:
+                    title = self._fallback_title_from_url(url)
+                    self._log("Using manually provided M3U8 URL")
+                    return title, manual_m3u8
             return None, None
 
         title = self._extract_title(html)
@@ -179,16 +192,53 @@ class PageScraper:
 
         return title, m3u8_url
 
-    def _fetch_html(self, url: str) -> Optional[str]:
+    @staticmethod
+    def _normalize_missav_url(url: str) -> str:
+        """Canonicalize MissAV URLs to https://missav.ai/<path>."""
+        m = re.match(r"^https?://(?:www\.)?missav\.[^/]+(?:/(.*))?$", url.strip(), re.IGNORECASE)
+        if not m:
+            return url
+
+        path = (m.group(1) or "").split("?", 1)[0].split("#", 1)[0].lstrip("/")
+        path = re.sub(r"^dm\d+/", "", path, flags=re.IGNORECASE)
+        path = re.sub(r"^[a-z]{2}(?:-[a-z]{2})?/", "", path, flags=re.IGNORECASE)
+
+        return f"https://missav.ai/{path}" if path else "https://missav.ai/"
+
+    def _fetch_html(self, url: str) -> tuple[Optional[str], bool]:
         for attempt in range(MAX_RETRIES):
-            html = self._http.fetch_page(url)
+            try:
+                html = self._http.fetch_page(url, timeout_ms=PAGE_LOAD_TIMEOUT_MS)
+            except PageFetchTimeoutError:
+                self._log("Page load timed out after 10 seconds (possible Cloudflare challenge)")
+                return None, True
+
             if html is not None:
-                return html
+                return html, False
             self._log(f"Attempt {attempt + 1}/{MAX_RETRIES} failed")
             if attempt < MAX_RETRIES - 1:
                 time.sleep(3)
         self._log("Failed to fetch page after retries")
-        return None
+        return None, False
+
+    @staticmethod
+    def _fallback_title_from_url(url: str) -> str:
+        path = url.rstrip("/").rsplit("/", 1)[-1]
+        cleaned = re.sub(r"[^\w\-_\. ]", "", path)
+        return cleaned or "missav_video"
+
+    @staticmethod
+    def _prompt_manual_m3u8() -> Optional[str]:
+        print("Cloudflare may be blocking automated page loading.", file=sys.stderr)
+        print("Enter M3U8 URL manually to continue (leave empty to cancel):", file=sys.stderr)
+        manual = input("> ").strip()
+        if not manual:
+            print("No M3U8 URL provided. Aborting.", file=sys.stderr)
+            return None
+        if not re.match(r"^https?://", manual, re.IGNORECASE):
+            print("Invalid M3U8 URL. Expected http(s) URL.", file=sys.stderr)
+            return None
+        return manual
 
     @staticmethod
     def _extract_title(html: str) -> Optional[str]:
@@ -396,9 +446,14 @@ class VideoDownloadOrchestrator:
         self._temp_path = output_path / ".tmp"
 
     def run(self) -> bool:
-        title, m3u8_url = self._scraper.scrape(self._url)
-        if not title or not m3u8_url:
-            return False
+        if self._is_m3u8_url(self._url):
+            title = PageScraper._fallback_title_from_url(self._url)
+            m3u8_url = self._url
+            self._logger.log("Detected M3U8 input URL, skipping page scraping")
+        else:
+            title, m3u8_url = self._scraper.scrape(self._url)
+            if not title or not m3u8_url:
+                return False
 
         info = self._m3u8_parser.parse(m3u8_url)
         if not info or not info.segments:
@@ -421,6 +476,10 @@ class VideoDownloadOrchestrator:
         self._http.close()
         self._logger.log(f"Download complete: {output_file}")
         return True
+
+    @staticmethod
+    def _is_m3u8_url(url: str) -> bool:
+        return bool(re.match(r"^https?://.+\.m3u8(?:\?.*)?$", url.strip(), re.IGNORECASE))
 
     def _download_parallel(self, downloader: SegmentDownloader, segments: List[str]) -> int:
         total = len(segments)
@@ -448,6 +507,25 @@ class VideoDownloadOrchestrator:
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 
+def _preflight_playwright_chromium() -> bool:
+    """Verify Playwright Chromium is available before starting downloads."""
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            browser.close()
+        return True
+    except Exception as e:
+        msg = str(e)
+        lower = msg.lower()
+        if "executable doesn't exist" in lower or "please run the following command" in lower:
+            print("Playwright Chromium is not installed.", file=sys.stderr)
+            print("Install it with: uv playwright install chromium", file=sys.stderr)
+        else:
+            print(f"Playwright preflight failed: {msg}", file=sys.stderr)
+            print("If Chromium is missing, install it with: uv playwright install chromium", file=sys.stderr)
+        return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MissAV video downloader")
     parser.add_argument("url", help="MissAV video URL (e.g., https://missav.ai/sone-543)")
@@ -455,6 +533,9 @@ def main() -> None:
     parser.add_argument("-q", "--quiet", action="store_true", help="Suppress output messages")
     parser.add_argument("-w", "--workers", type=int, default=DEFAULT_WORKERS, help=f"Parallel download workers (default: {DEFAULT_WORKERS})")
     args = parser.parse_args()
+
+    if not VideoDownloadOrchestrator._is_m3u8_url(args.url) and not _preflight_playwright_chromium():
+        sys.exit(1)
 
     orchestrator = VideoDownloadOrchestrator(args.url, args.output, args.quiet, args.workers)
     sys.exit(0 if orchestrator.run() else 1)
