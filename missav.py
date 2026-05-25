@@ -72,13 +72,18 @@ class Logger:
 class HttpClient:
     """Single-responsibility: own and expose HTTP sessions (Playwright + plain requests)."""
 
-    def __init__(self):
-        self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=True)
+    def __init__(self, enable_browser: bool = True):
+        self._pw = None
+        self._browser = None
+        if enable_browser:
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(headless=True)
         self.session = self._build_session()
 
     def fetch_page(self, url: str, timeout_ms: int = PAGE_LOAD_TIMEOUT_MS) -> Optional[str]:
         """Fetch a page via Playwright, returns HTML or None."""
+        if self._browser is None:
+            return None
         ctx = self._browser.new_context(user_agent=REQUEST_HEADERS["User-Agent"])
         try:
             page = ctx.new_page()
@@ -94,8 +99,10 @@ class HttpClient:
             ctx.close()
 
     def close(self):
-        self._browser.close()
-        self._pw.stop()
+        if self._browser is not None:
+            self._browser.close()
+        if self._pw is not None:
+            self._pw.stop()
 
     @staticmethod
     def _build_session() -> requests.Session:
@@ -439,24 +446,28 @@ class VideoDownloadOrchestrator:
         output_path.mkdir(parents=True, exist_ok=True)
 
         self._logger = Logger(silent)
-        self._http = HttpClient()
-        self._scraper = PageScraper(self._http, self._logger)
-        self._m3u8_parser = M3u8Parser(self._http, self._logger)
+        self._http: Optional[HttpClient] = None
         self._output_path = output_path
         self._temp_path = output_path / ".tmp"
 
     def run(self) -> bool:
         if self._is_m3u8_url(self._url):
+            self._http = HttpClient(enable_browser=False)
             title = PageScraper._fallback_title_from_url(self._url)
             m3u8_url = self._url
             self._logger.log("Detected M3U8 input URL, skipping page scraping")
         else:
-            title, m3u8_url = self._scraper.scrape(self._url)
+            self._http = HttpClient(enable_browser=True)
+            scraper = PageScraper(self._http, self._logger)
+            title, m3u8_url = scraper.scrape(self._url)
             if not title or not m3u8_url:
+                self._http.close()
                 return False
 
-        info = self._m3u8_parser.parse(m3u8_url)
+        parser = M3u8Parser(self._http, self._logger)
+        info = parser.parse(m3u8_url)
         if not info or not info.segments:
+            self._http.close()
             return False
 
         self._temp_path.mkdir(parents=True, exist_ok=True)
@@ -466,11 +477,13 @@ class VideoDownloadOrchestrator:
         total = len(info.segments)
         self._logger.log(f"Downloaded {downloaded}/{total} segments")
         if downloaded < total:
+            self._http.close()
             return False
 
         merger = SegmentMerger(self._output_path, self._temp_path, self._logger)
         output_file = merger.merge(title, total)
         if output_file is None:
+            self._http.close()
             return False
 
         self._http.close()
