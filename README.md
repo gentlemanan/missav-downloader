@@ -11,7 +11,7 @@ uvx --with playwright missav-downloader playwright install chromium
 
 2. Download a video
 ```bash
-uvx --from git+[https://github.com/gentlemanan/missav-downloader](https://github.com/gentlemanan/missav-downloader) missav <URL>
+uvx --from git+https://github.com/gentlemanan/missav-downloader missav <URL>
 ```
 
 ### Options
